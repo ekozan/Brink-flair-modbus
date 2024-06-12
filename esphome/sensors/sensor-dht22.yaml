@@ -19,3 +19,65 @@ sensor:
     update_interval: 30s
     lambda: 'return ((id(brink_temp_to_inside).state - id(brink_temp_from_outside).state)/(id(brink_temp_from_inside).state - id(brink_temp_from_outside).state)*100);'
    # (temp_to_inside - temp_from_outside) / (temp_from_inside - temp_from_outside)
+
+  - platform: copy
+    name:  ${brink_humidity_from_inside_deviation}
+    source_id: brink_humidity_from_inside
+    filters:
+      - lambda: |-
+          // max measurements to store for computing standard deviation
+          const uint8_t window_size_ = 60;
+          // compute and send the standard deviation after this many measurements
+          const uint8_t send_every_ = 15; 
+
+          static std::deque<float> queue_;
+          static uint8_t send_at_ = 0;
+          
+          // If we have more entries in queue_ than the window_size_, 
+          // then pop them off
+          while (queue_.size() >= window_size_) {
+            queue_.pop_front();
+          }
+
+          // add the newest reading to queue_
+          queue_.push_back(x);
+
+          if (++send_at_ >= send_every_) {
+            send_at_ = 0;
+
+            float Ex = 0.0;
+            float Ex2 = 0.0;
+            size_t count = 0;
+
+            float K = queue_.front();
+            
+            for (auto v: queue_) {
+              if (!std::isnan(v)) {
+                // Welford's algorithm to avoid catastrophic cancellation
+                //  - This is achieved by subtracting the oldest reading from 
+                //    each measurement. If not done, then the sum of the 
+                //    measurements squared and the square of the measurements 
+                //    summed may be quite large, and their difference can be 
+                //    problematic resulting in catastrophic cancellation
+
+                // counts valid measurements
+                count += 1;
+                // sums the measurement minus the oldest reading
+                Ex += v - K;
+                 // sums the measurement minus the oldest reading squared
+                Ex2 += pow(v-K,2);
+              }
+            }
+
+            float standard_deviation = NAN;
+            // If we have at least one valid reading, then compute the 
+            // variance and standard deviation, otherwise it will remain NAN
+            if (count) {
+              float variance = (Ex2 - pow(Ex, 2)/count) / (count-1);
+              // standard deviation is the square root of the variance
+              standard_deviation = sqrt(variance); 
+            }
+
+            return standard_deviation;
+          }
+          return {};
