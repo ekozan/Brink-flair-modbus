@@ -22,7 +22,7 @@ débit cible     = max(base, demande), borné entre min et max
 | Fonction | Déclenchement | Action |
 |---|---|---|
 | Économie de calories | écart T int − T ext > 12 °C | débit réduit linéairement jusqu'au « débit éco minimum » à 25 °C d'écart |
-| Refroidissement gratuit | T int ≥ 24 °C, T ext ≤ T int − 2 °C, T ext ≥ 12 °C | by-pass **ouvert**, by-pass boost ON (si renseigné), débit refroidissement ; s'arrête quand T int redescend à 22,5 °C |
+| Refroidissement gratuit | T int ≥ 24 °C, T ext ≤ T int − 2 °C, T ext ≥ 12 °C | by-pass **ouvert** + débit refroidissement en Modbus Flow ; s'arrête quand T int redescend à 22,5 °C |
 | Protection été | T ext ≥ T int − 0,5 °C et T int ≥ 22 °C | by-pass **fermé** (l'échangeur récupère la fraîcheur), débit réduit |
 | Boost humidité | dérivée ≥ 1 %/min **ou** humidité ≥ 80 % | débit boost ; maintenu au moins 10 min, puis tant que l'humidité baisse vite (< −0,3 %/min) et reste > 60 % ; 60 min maximum |
 | Boost CO₂ | CO₂ > 800 ppm | débit proportionnel jusqu'au max à 1200 ppm |
@@ -36,11 +36,63 @@ Tous les seuils sont réglables. Le by-pass ne revient à « Auto » (ou « Ferm
 que hors refroidissement et hors protection été. Des hystérésis évitent les allers-retours
 du moteur du by-pass.
 
+## Paramètres réglables
+
+Valeurs par défaut entre parenthèses.
+
+**VMC Brink**
+- Débit Modbus (m³/h) — `number.brink_modbus_flow_rate` *(obligatoire)*
+- Mode de contrôle Modbus — `select.brink_modbus_control_mode`, maintenu sur Modbus Flow *(obligatoire)*
+- Mode by-pass — `select.brink_bypass_mode` (optionnel)
+- Pause / mode manuel — `input_boolean` (optionnel)
+- Texte d'état — `input_text` (optionnel)
+
+**Débits**
+- Débit minimum absolu (50 m³/h) / maximum absolu (280 m³/h)
+- Débit normal en présence (150 m³/h)
+- Débit absence (90 m³/h) / vacances (60 m³/h)
+- Variation minimale avant écriture Modbus (10 m³/h)
+
+**Températures, économie de calories et été**
+- Température intérieure, température extérieure *(obligatoires)*
+- Écart int/ext de début de réduction (12 °C) et de réduction maximale (25 °C)
+- Débit éco minimum par grand froid (80 m³/h)
+- Protection été : activée (oui), T int minimale (22 °C), marge (0,5 °C), débit (70 m³/h)
+
+**Refroidissement gratuit (by-pass)**
+- Activé (oui)
+- T int de démarrage (24 °C) / d'arrêt (22,5 °C)
+- Écart minimal int − ext (2 °C), T ext minimale (12 °C)
+- Débit refroidissement (250 m³/h)
+- Refroidir aussi en absence (oui), plafond de nuit appliqué au refroidissement (non)
+- Position du by-pass le reste du temps : Auto ou Fermé (Auto)
+
+**Boost humidité**
+- Capteur d'humidité, dérivée en %/min, mémoire `input_boolean` (optionnels)
+- Seuil de montée (1 %/min), seuil de stabilisation (0,3 %/min)
+- Humidité absolue de boost (80 %), humidité de fin (60 %)
+- Durée minimale (10 min) / maximale (60 min)
+- Débit boost humidité (280 m³/h)
+
+**Boost CO₂ et pollution**
+- Capteur CO₂ (optionnel), début de boost (800 ppm), boost maximal (1200 ppm)
+- Capteur de pollution intérieure (optionnel), seuil bas (15) / haut (50)
+- Débit boost CO₂ / pollution maximal (280 m³/h)
+- Capteur de pollution extérieure (optionnel), seuil (35), débit max si pollué (70 m³/h)
+
+**Absence, vacances et nuit**
+- Entité de présence (optionnel), délai avant mode absence (15 min)
+- Entité vacances (optionnel)
+- Autoriser les boosts humidité / CO₂ en absence (non)
+- Plafond de nuit : activé (non), début (22:30), fin (07:00), débit max (120 m³/h)
+
 ## Prérequis
 
-1. **ESPHome** : entités `number.brink_modbus_flow_rate`, `select.brink_modbus_control_mode`,
-   `select.brink_bypass_mode`, `switch.brink_bypass_boost` (noms selon votre `name:`).
-   Le blueprint force *Modbus Control Mode* sur **Modbus Flow** si vous renseignez ce select.
+1. **ESPHome** : entités `number.brink_modbus_flow_rate`, `select.brink_modbus_control_mode`
+   et `select.brink_bypass_mode` (noms selon votre `name:`).
+   Le blueprint maintient *Modbus Control Mode* sur **Modbus Flow** : tout le pilotage passe
+   par le débit en m³/h. La fonction *Bypass Boost* de la Brink n'est pas utilisée
+   (laissez-la désactivée).
 2. **Températures** : une sonde intérieure de référence (thermostat, ou la sonde de
    l'ESP sur l'extraction) et `sensor.brink_temperature_from_outside`.
 3. **Helpers** (Paramètres > Appareils et services > Entrées), tous facultatifs :
@@ -65,7 +117,4 @@ puis *Paramètres > Automatisations > Blueprints > Brink Flair - VMC intelligent
 - Réglez « Débit maximum absolu » selon votre modèle (le slider ESPHome de la Flair 325
   est limité à 280 m³/h).
 - La protection antigel reste gérée par la Brink elle-même.
-- Le comportement du *Bypass Boost* dépend du firmware : en mode Modbus Flow, c'est le débit
-  envoyé par le blueprint qui prime. Laissez ce champ vide si vous préférez ne piloter que le
-  *Bypass Mode*.
 - Pour reprendre la main, activez l'interrupteur de pause : le blueprint ne touche plus à rien.

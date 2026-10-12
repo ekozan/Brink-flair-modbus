@@ -11,8 +11,7 @@ blueprint:
     * **Économie de calories** : réduction progressive du débit quand l'écart
     température intérieure / extérieure devient important (hiver).
 
-    * **Refroidissement gratuit** : ouverture du by-pass (+ by-pass boost optionnel) et
-    augmentation du débit quand il fait trop chaud dedans et plus frais dehors (nuits d'été).
+    * **Refroidissement gratuit** : ouverture du by-pass et augmentation du débit Modbus Flow quand il fait trop chaud dedans et plus frais dehors (nuits d'été).
 
     * **Protection été** : by-pass fermé et débit réduit quand l'air extérieur est plus
     chaud que l'intérieur, pour ne pas réchauffer la maison.
@@ -44,11 +43,10 @@ blueprint:
               filter:
                 domain: number
         control_mode_entity:
-          name: Mode de contrôle Modbus (optionnel)
+          name: Mode de contrôle Modbus
           description: >
-            Select « Modbus Control Mode ». S'il est renseigné, il est forcé sur « Modbus Flow »
-            (utile après une coupure de courant de la VMC).
-          default: ""
+            Select « Modbus Control Mode » (ex. select.brink_modbus_control_mode). Il est
+            maintenu sur « Modbus Flow » (la VMC repasse en « Device LCD » après une coupure).
           selector:
             entity:
               filter:
@@ -61,15 +59,6 @@ blueprint:
             entity:
               filter:
                 domain: select
-        bypass_boost_entity:
-          name: Switch By-pass Boost (optionnel)
-          description: >
-            Switch « Bypass Boost ». Activé pendant le refroidissement gratuit si renseigné.
-          default: ""
-          selector:
-            entity:
-              filter:
-                domain: switch
         override_entity:
           name: Pause / mode manuel (optionnel)
           description: Interrupteur (input_boolean) qui suspend l'automatisation quand il est ON.
@@ -445,7 +434,6 @@ variables:
   flow_entity: !input flow_entity
   control_mode_entity: !input control_mode_entity
   bypass_mode_entity: !input bypass_mode_entity
-  bypass_boost_entity: !input bypass_boost_entity
   override_entity: !input override_entity
   status_entity: !input status_entity
   flow_min: !input flow_min
@@ -663,7 +651,7 @@ actions:
   - if:
       - condition: template
         value_template: >
-          {% set opts = state_attr(control_mode_entity, 'options') if control_mode_entity else none %}
+          {% set opts = state_attr(control_mode_entity, 'options') %}
           {{ opts is not none and opts | count >= 3 and states(control_mode_entity) != opts[2] }}
     then:
       - action: select.select_option
@@ -701,17 +689,6 @@ actions:
               entity_id: "{{ bypass_mode_entity }}"
             data:
               option: "{{ wanted_bypass }}"
-
-  - if:
-      - condition: template
-        value_template: >
-          {{ bypass_boost_entity != ''
-             and states(bypass_boost_entity) in ['on', 'off']
-             and is_state(bypass_boost_entity, 'on') != cooling_active }}
-    then:
-      - action: "switch.turn_{{ 'on' if cooling_active else 'off' }}"
-        target:
-          entity_id: "{{ bypass_boost_entity }}"
 
   # Débit
   - if:
