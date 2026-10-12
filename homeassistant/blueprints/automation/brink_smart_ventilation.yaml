@@ -1,0 +1,740 @@
+blueprint:
+  name: Brink Flair - VMC intelligente
+  author: Brink-flair-modbus
+  description: >
+    Pilotage intelligent d'une VMC double flux Brink (ESPHome Brink-flair-modbus) en mode
+    **Modbus Flow** (débit en m³/h).
+
+
+    Fonctions :
+
+    * **Économie de calories** : réduction progressive du débit quand l'écart
+    température intérieure / extérieure devient important (hiver).
+
+    * **Refroidissement gratuit** : ouverture du by-pass (+ by-pass boost optionnel) et
+    augmentation du débit quand il fait trop chaud dedans et plus frais dehors (nuits d'été).
+
+    * **Protection été** : by-pass fermé et débit réduit quand l'air extérieur est plus
+    chaud que l'intérieur, pour ne pas réchauffer la maison.
+
+    * **Boosts** : humidité (dérive en %/min, avec maintien jusqu'à séchage), CO₂ et
+    pollution intérieure (débit proportionnel), limitation si l'air extérieur est pollué.
+
+    * **Absence / vacances** : débit réduit quand personne n'est à la maison.
+
+    * **Nuit** : plafond de débit pour le confort acoustique (les boosts restent prioritaires).
+
+
+    L'automatisation tourne chaque minute et n'écrit sur le Modbus que si le débit cible
+    change d'au moins « Variation minimale ».
+  domain: automation
+  source_url: https://github.com/ekozan/brink-flair-modbus/blob/main/homeassistant/blueprints/automation/brink_smart_ventilation.yaml
+  homeassistant:
+    min_version: 2024.6.0
+  input:
+    vmc:
+      name: VMC Brink
+      icon: mdi:hvac
+      input:
+        flow_entity:
+          name: Débit Modbus (m³/h)
+          description: Entité number « Modbus flow rate » (ex. number.brink_modbus_flow_rate).
+          selector:
+            entity:
+              filter:
+                domain: number
+        control_mode_entity:
+          name: Mode de contrôle Modbus (optionnel)
+          description: >
+            Select « Modbus Control Mode ». S'il est renseigné, il est forcé sur « Modbus Flow »
+            (utile après une coupure de courant de la VMC).
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: select
+        bypass_mode_entity:
+          name: Mode by-pass (optionnel)
+          description: Select « Bypass Mode » (Auto / Fermé / Ouvert).
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: select
+        bypass_boost_entity:
+          name: Switch By-pass Boost (optionnel)
+          description: >
+            Switch « Bypass Boost ». Activé pendant le refroidissement gratuit si renseigné.
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: switch
+        override_entity:
+          name: Pause / mode manuel (optionnel)
+          description: Interrupteur (input_boolean) qui suspend l'automatisation quand il est ON.
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: input_boolean
+        status_entity:
+          name: Texte d'état (optionnel)
+          description: input_text où écrire le mode actif et le débit cible (debug / dashboard).
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: input_text
+
+    flows:
+      name: Débits
+      icon: mdi:fan
+      input:
+        flow_min:
+          name: Débit minimum absolu
+          default: 50
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+        flow_max:
+          name: Débit maximum absolu
+          description: Limite haute (ex. 280 pour une Flair 325).
+          default: 280
+          selector:
+            number: {min: 50, max: 600, step: 5, unit_of_measurement: "m³/h"}
+        flow_normal:
+          name: Débit normal (présence)
+          default: 150
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+        flow_away:
+          name: Débit absence
+          default: 90
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+        flow_vacation:
+          name: Débit vacances
+          default: 60
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+        min_change:
+          name: Variation minimale avant écriture
+          description: Évite de spammer le bus Modbus pour de petites variations.
+          default: 10
+          selector:
+            number: {min: 1, max: 100, step: 1, unit_of_measurement: "m³/h"}
+
+    thermal:
+      name: Températures, économie de calories et été
+      icon: mdi:thermometer
+      input:
+        temp_in_entity:
+          name: Température intérieure
+          description: >
+            Sonde de référence de la maison (thermostat, ou « Temperature from inside » de l'ESP
+            placé sur l'extraction).
+          selector:
+            entity:
+              filter:
+                domain: sensor
+                device_class: temperature
+        temp_out_entity:
+          name: Température extérieure
+          description: Ex. sensor.brink_temperature_from_outside (air neuf avant échangeur).
+          selector:
+            entity:
+              filter:
+                domain: sensor
+                device_class: temperature
+        eco_delta_start:
+          name: Écart int/ext début de réduction
+          description: En dessous de cet écart, aucune réduction de débit.
+          default: 12
+          selector:
+            number: {min: 0, max: 40, step: 0.5, unit_of_measurement: "°C"}
+        eco_delta_max:
+          name: Écart int/ext réduction maximale
+          description: À partir de cet écart, le débit est au « Débit éco minimum ».
+          default: 25
+          selector:
+            number: {min: 1, max: 50, step: 0.5, unit_of_measurement: "°C"}
+        flow_eco_min:
+          name: Débit éco minimum (grand froid)
+          default: 80
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+        summer_enabled:
+          name: Activer la protection été
+          default: true
+          selector:
+            boolean:
+        summer_min_in:
+          name: Protection été - température intérieure minimale
+          description: La protection n'agit que si l'intérieur dépasse cette température.
+          default: 22
+          selector:
+            number: {min: 15, max: 30, step: 0.5, unit_of_measurement: "°C"}
+        summer_margin:
+          name: Protection été - marge
+          description: Active la protection quand T ext > T int - marge.
+          default: 0.5
+          selector:
+            number: {min: -5, max: 5, step: 0.5, unit_of_measurement: "°C"}
+        flow_summer:
+          name: Débit protection été
+          default: 70
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+
+    cooling:
+      name: Refroidissement gratuit (by-pass)
+      icon: mdi:snowflake
+      input:
+        cooling_enabled:
+          name: Activer le refroidissement gratuit
+          default: true
+          selector:
+            boolean:
+        cooling_start:
+          name: Température intérieure de démarrage
+          default: 24
+          selector:
+            number: {min: 18, max: 30, step: 0.5, unit_of_measurement: "°C"}
+        cooling_target:
+          name: Température intérieure d'arrêt
+          description: Le refroidissement s'arrête quand l'intérieur redescend à cette valeur.
+          default: 22.5
+          selector:
+            number: {min: 16, max: 30, step: 0.5, unit_of_measurement: "°C"}
+        cooling_margin:
+          name: Écart minimal int - ext
+          description: L'extérieur doit être au moins autant plus frais que l'intérieur.
+          default: 2
+          selector:
+            number: {min: 0.5, max: 10, step: 0.5, unit_of_measurement: "°C"}
+        cooling_min_out:
+          name: Température extérieure minimale
+          description: Pas de refroidissement si l'air extérieur est plus froid (courants d'air froid).
+          default: 12
+          selector:
+            number: {min: 0, max: 20, step: 0.5, unit_of_measurement: "°C"}
+        flow_cooling:
+          name: Débit refroidissement
+          default: 250
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+        cooling_when_away:
+          name: Refroidir aussi en absence
+          default: true
+          selector:
+            boolean:
+        cooling_night_cap:
+          name: Le plafond de nuit s'applique au refroidissement
+          default: false
+          selector:
+            boolean:
+        bypass_default:
+          name: By-pass hors refroidissement / protection été
+          default: auto
+          selector:
+            select:
+              options:
+                - label: Auto (géré par la Brink)
+                  value: auto
+                - label: Fermé
+                  value: closed
+
+    humidity:
+      name: Boost humidité
+      icon: mdi:water-percent
+      input:
+        humidity_entity:
+          name: Humidité (optionnel)
+          description: Ex. sensor.brink_humidity_from_inside ou capteur de salle de bain.
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: sensor
+                device_class: humidity
+        humidity_derivative_entity:
+          name: Dérivée de l'humidité en %/min (optionnel)
+          description: >
+            Helper « Dérivée » (Paramètres > Helpers > Dérivée) sur le capteur d'humidité,
+            unité de temps = minutes, fenêtre ≈ 3 min.
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: sensor
+        humidity_latch_entity:
+          name: Mémoire du boost humidité (recommandé)
+          description: >
+            input_boolean dédié qui maintient le boost jusqu'au séchage. Sans lui, le boost ne
+            dure que pendant la montée d'humidité.
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: input_boolean
+        humidity_rise:
+          name: Seuil de montée
+          default: 1
+          selector:
+            number: {min: 0.1, max: 10, step: 0.1, unit_of_measurement: "%/min"}
+        humidity_fall:
+          name: Seuil de stabilisation
+          description: >
+            Le boost s'arrête (après la durée minimale) quand l'humidité ne baisse plus plus vite
+            que cette valeur.
+          default: 0.3
+          selector:
+            number: {min: 0, max: 5, step: 0.1, unit_of_measurement: "%/min"}
+        humidity_high:
+          name: Humidité absolue de boost
+          description: Boost aussi si l'humidité dépasse ce niveau.
+          default: 80
+          selector:
+            number: {min: 40, max: 100, step: 1, unit_of_measurement: "%"}
+        humidity_ok:
+          name: Humidité de fin
+          description: Le boost s'arrête dès que l'humidité redescend sous ce niveau (après la durée minimale).
+          default: 60
+          selector:
+            number: {min: 30, max: 100, step: 1, unit_of_measurement: "%"}
+        humidity_min_duration:
+          name: Durée minimale du boost
+          default: 10
+          selector:
+            number: {min: 0, max: 120, step: 1, unit_of_measurement: min}
+        humidity_max_duration:
+          name: Durée maximale du boost
+          default: 60
+          selector:
+            number: {min: 5, max: 240, step: 5, unit_of_measurement: min}
+        flow_humidity:
+          name: Débit boost humidité
+          default: 280
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+
+    air_quality:
+      name: Boost CO₂ et pollution
+      icon: mdi:molecule-co2
+      input:
+        co2_entity:
+          name: CO₂ (optionnel)
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: sensor
+        co2_low:
+          name: CO₂ début de boost
+          default: 800
+          selector:
+            number: {min: 400, max: 2000, step: 50, unit_of_measurement: ppm}
+        co2_high:
+          name: CO₂ boost maximal
+          default: 1200
+          selector:
+            number: {min: 500, max: 3000, step: 50, unit_of_measurement: ppm}
+        pollution_entity:
+          name: Pollution intérieure (optionnel)
+          description: PM2.5, COV / VOC index... toute valeur numérique « plus haut = pire ».
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: sensor
+        pollution_low:
+          name: Pollution intérieure début de boost
+          default: 15
+          selector:
+            number: {min: 0, max: 1000, step: 1}
+        pollution_high:
+          name: Pollution intérieure boost maximal
+          default: 50
+          selector:
+            number: {min: 1, max: 2000, step: 1}
+        flow_air_quality_max:
+          name: Débit boost CO₂ / pollution maximal
+          default: 280
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+        outdoor_pollution_entity:
+          name: Pollution extérieure (optionnel)
+          description: Ex. PM2.5 extérieur. Au-delà du seuil, le débit de base est limité.
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: sensor
+        outdoor_pollution_threshold:
+          name: Seuil de pollution extérieure
+          default: 35
+          selector:
+            number: {min: 0, max: 1000, step: 1}
+        flow_outdoor_pollution:
+          name: Débit max si air extérieur pollué
+          default: 70
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+
+    presence:
+      name: Absence, vacances et nuit
+      icon: mdi:home-account
+      input:
+        presence_entity:
+          name: Présence (optionnel)
+          description: >
+            zone.home (nombre de personnes), group/person (home), binary_sensor ou input_boolean
+            (on = présent).
+          default: ""
+          selector:
+            entity: {}
+        away_delay:
+          name: Délai avant mode absence
+          default: 15
+          selector:
+            number: {min: 0, max: 240, step: 1, unit_of_measurement: min}
+        vacation_entity:
+          name: Mode vacances (optionnel)
+          description: input_boolean / binary_sensor ON = vacances.
+          default: ""
+          selector:
+            entity:
+              filter:
+                domain: [input_boolean, binary_sensor, switch]
+        boost_when_away:
+          name: Autoriser les boosts humidité / CO₂ en absence
+          default: false
+          selector:
+            boolean:
+        night_enabled:
+          name: Activer le plafond de nuit
+          default: false
+          selector:
+            boolean:
+        night_start:
+          name: Début de nuit
+          default: "22:30:00"
+          selector:
+            time:
+        night_end:
+          name: Fin de nuit
+          default: "07:00:00"
+          selector:
+            time:
+        flow_night_max:
+          name: Débit max la nuit (hors boosts)
+          default: 120
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: time_pattern
+    minutes: "/1"
+  - trigger: homeassistant
+    event: start
+
+variables:
+  flow_entity: !input flow_entity
+  control_mode_entity: !input control_mode_entity
+  bypass_mode_entity: !input bypass_mode_entity
+  bypass_boost_entity: !input bypass_boost_entity
+  override_entity: !input override_entity
+  status_entity: !input status_entity
+  flow_min: !input flow_min
+  flow_max: !input flow_max
+  flow_normal: !input flow_normal
+  flow_away: !input flow_away
+  flow_vacation: !input flow_vacation
+  min_change: !input min_change
+  temp_in_entity: !input temp_in_entity
+  temp_out_entity: !input temp_out_entity
+  eco_delta_start: !input eco_delta_start
+  eco_delta_max: !input eco_delta_max
+  flow_eco_min: !input flow_eco_min
+  summer_enabled: !input summer_enabled
+  summer_min_in: !input summer_min_in
+  summer_margin: !input summer_margin
+  flow_summer: !input flow_summer
+  cooling_enabled: !input cooling_enabled
+  cooling_start: !input cooling_start
+  cooling_target: !input cooling_target
+  cooling_margin: !input cooling_margin
+  cooling_min_out: !input cooling_min_out
+  flow_cooling: !input flow_cooling
+  cooling_when_away: !input cooling_when_away
+  cooling_night_cap: !input cooling_night_cap
+  bypass_default: !input bypass_default
+  humidity_entity: !input humidity_entity
+  humidity_derivative_entity: !input humidity_derivative_entity
+  humidity_latch_entity: !input humidity_latch_entity
+  humidity_rise: !input humidity_rise
+  humidity_fall: !input humidity_fall
+  humidity_high: !input humidity_high
+  humidity_ok: !input humidity_ok
+  humidity_min_duration: !input humidity_min_duration
+  humidity_max_duration: !input humidity_max_duration
+  flow_humidity: !input flow_humidity
+  co2_entity: !input co2_entity
+  co2_low: !input co2_low
+  co2_high: !input co2_high
+  pollution_entity: !input pollution_entity
+  pollution_low: !input pollution_low
+  pollution_high: !input pollution_high
+  flow_air_quality_max: !input flow_air_quality_max
+  outdoor_pollution_entity: !input outdoor_pollution_entity
+  outdoor_pollution_threshold: !input outdoor_pollution_threshold
+  flow_outdoor_pollution: !input flow_outdoor_pollution
+  presence_entity: !input presence_entity
+  away_delay: !input away_delay
+  vacation_entity: !input vacation_entity
+  boost_when_away: !input boost_when_away
+  night_enabled: !input night_enabled
+  night_start: !input night_start
+  night_end: !input night_end
+  flow_night_max: !input flow_night_max
+
+  # ---------- Lectures ----------
+  t_in: "{{ states(temp_in_entity) | float(none) }}"
+  t_out: "{{ states(temp_out_entity) | float(none) }}"
+  temps_ok: "{{ t_in is number and t_out is number }}"
+  delta: "{{ (t_in - t_out) | round(1) if temps_ok else none }}"
+  hum: "{{ states(humidity_entity) | float(none) if humidity_entity else none }}"
+  hum_deriv: "{{ states(humidity_derivative_entity) | float(none) if humidity_derivative_entity else none }}"
+  co2: "{{ states(co2_entity) | float(none) if co2_entity else none }}"
+  pollution: "{{ states(pollution_entity) | float(none) if pollution_entity else none }}"
+  outdoor_pollution: "{{ states(outdoor_pollution_entity) | float(none) if outdoor_pollution_entity else none }}"
+  current_flow: "{{ states(flow_entity) | float(none) }}"
+
+  # ---------- Présence ----------
+  vacation: "{{ vacation_entity != '' and is_state(vacation_entity, 'on') }}"
+  present: >
+    {% if not presence_entity %}
+      {{ true }}
+    {% else %}
+      {% set s = states(presence_entity) %}
+      {% set here = s in ['home', 'on', 'true'] or (s | is_number and s | float(0) > 0) %}
+      {% if here or s in ['unknown', 'unavailable'] %}
+        {{ true }}
+      {% else %}
+        {% set since = states[presence_entity].last_changed if states[presence_entity] else now() %}
+        {{ (now() - since).total_seconds() < away_delay * 60 }}
+      {% endif %}
+    {% endif %}
+  occupied: "{{ present and not vacation }}"
+  boosts_allowed: "{{ occupied or boost_when_away }}"
+
+  # ---------- Nuit ----------
+  is_night: >
+    {% if not night_enabled %}
+      {{ false }}
+    {% else %}
+      {% set t = now().strftime('%H:%M:%S') %}
+      {% if night_start <= night_end %}
+        {{ night_start <= t < night_end }}
+      {% else %}
+        {{ t >= night_start or t < night_end }}
+      {% endif %}
+    {% endif %}
+
+  # ---------- By-pass : refroidissement / protection été ----------
+  bypass_options: "{{ state_attr(bypass_mode_entity, 'options') or [] if bypass_mode_entity else [] }}"
+  bypass_is_open: >
+    {{ bypass_mode_entity != '' and bypass_options | count >= 3
+       and is_state(bypass_mode_entity, bypass_options[2]) }}
+  cooling_active: >
+    {% if not (cooling_enabled and temps_ok) or (not occupied and not cooling_when_away) %}
+      {{ false }}
+    {% else %}
+      {# hystérésis : une fois le by-pass ouvert, on tient jusqu'à la consigne d'arrêt #}
+      {% set threshold = cooling_target if bypass_is_open else cooling_start %}
+      {% set margin = cooling_margin / 2 if bypass_is_open else cooling_margin %}
+      {{ t_in >= threshold and t_out <= t_in - margin and t_out >= cooling_min_out }}
+    {% endif %}
+  bypass_is_closed: >
+    {{ bypass_mode_entity != '' and bypass_options | count >= 3
+       and is_state(bypass_mode_entity, bypass_options[1]) }}
+  summer_active: >
+    {# hystérésis de 1 °C pour ne pas faire battre le moteur du by-pass #}
+    {% set h = 1 if bypass_is_closed and bypass_default == 'auto' else 0 %}
+    {{ summer_enabled and temps_ok and not cooling_active
+       and t_in >= summer_min_in - h and t_out >= t_in - summer_margin - h }}
+
+  # ---------- Débit de base ----------
+  base_presence: "{{ flow_vacation if vacation else (flow_normal if present else flow_away) }}"
+  eco_flow: >
+    {% if temps_ok and delta > eco_delta_start and eco_delta_max > eco_delta_start %}
+      {% set r = [[(delta - eco_delta_start) / (eco_delta_max - eco_delta_start), 0] | max, 1] | min %}
+      {{ (flow_normal - (flow_normal - flow_eco_min) * r) | round(0) }}
+    {% else %}
+      {{ flow_normal }}
+    {% endif %}
+  eco_active: "{{ eco_flow < flow_normal and eco_flow < base_presence }}"
+  base_flow: >
+    {% set b = [base_presence, eco_flow] | min %}
+    {% if summer_active %}{% set b = [b, flow_summer] | min %}{% endif %}
+    {% if cooling_active %}{% set b = [b, flow_cooling] | max %}{% endif %}
+    {% if is_night and (cooling_night_cap or not cooling_active) %}{% set b = [b, flow_night_max] | min %}{% endif %}
+    {{ b }}
+  outdoor_polluted: >
+    {{ outdoor_pollution is number and outdoor_pollution >= outdoor_pollution_threshold }}
+  base_flow_final: >
+    {{ [base_flow, flow_outdoor_pollution] | min if outdoor_polluted else base_flow }}
+
+  # ---------- Boost humidité (avec mémoire) ----------
+  latch_on: "{{ humidity_latch_entity != '' and is_state(humidity_latch_entity, 'on') }}"
+  latch_minutes: >
+    {% if humidity_latch_entity and states[humidity_latch_entity] %}
+      {{ ((now() - states[humidity_latch_entity].last_changed).total_seconds() / 60) | round(1) }}
+    {% else %}0{% endif %}
+  hum_rising: >
+    {{ (hum_deriv is number and hum_deriv >= humidity_rise)
+       or (hum is number and hum >= humidity_high) }}
+  hum_boost: >
+    {% if not (humidity_entity or humidity_derivative_entity) %}
+      {{ false }}
+    {% elif not humidity_latch_entity %}
+      {{ hum_rising }}
+    {% elif not latch_on %}
+      {# niveau absolu : pas de redéclenchement immédiat après la durée max #}
+      {{ (hum_deriv is number and hum_deriv >= humidity_rise)
+         or (hum is number and hum >= humidity_high and latch_minutes >= humidity_max_duration) }}
+    {% elif latch_minutes >= humidity_max_duration %}
+      {{ false }}
+    {% elif latch_minutes < humidity_min_duration %}
+      {{ true }}
+    {% else %}
+      {% set dried = hum is number and hum < humidity_ok %}
+      {% set stable = hum_deriv is number and hum_deriv > -humidity_fall and hum_deriv < humidity_rise %}
+      {% set still_high = hum is number and hum >= humidity_high %}
+      {{ not dried and (not stable or still_high) }}
+    {% endif %}
+
+  # ---------- Boost CO₂ / pollution (proportionnel) ----------
+  co2_flow: >
+    {% if co2 is number and co2 > co2_low and co2_high > co2_low %}
+      {% set r = [(co2 - co2_low) / (co2_high - co2_low), 1] | min %}
+      {{ (base_flow_final + (flow_air_quality_max - base_flow_final) * r) | round(0) }}
+    {% else %}0{% endif %}
+  pollution_flow: >
+    {% if pollution is number and pollution > pollution_low and pollution_high > pollution_low %}
+      {% set r = [(pollution - pollution_low) / (pollution_high - pollution_low), 1] | min %}
+      {% set f = (base_flow_final + (flow_air_quality_max - base_flow_final) * r) | round(0) %}
+      {{ [f, flow_outdoor_pollution] | min if outdoor_polluted else f }}
+    {% else %}0{% endif %}
+  demand_flow: >
+    {% if not boosts_allowed %}
+      0
+    {% else %}
+      {{ [flow_humidity if hum_boost else 0, co2_flow, pollution_flow] | max }}
+    {% endif %}
+
+  # ---------- Cible ----------
+  target_flow: >
+    {{ ([[[base_flow_final, demand_flow] | max, flow_min] | max, flow_max] | min) | int }}
+  mode_label: >
+    {% set m = [] %}
+    {% if vacation %}{% set m = m + ['vacances'] %}
+    {% elif not present %}{% set m = m + ['absence'] %}
+    {% else %}{% set m = m + ['présence'] %}{% endif %}
+    {% if eco_active %}{% set m = m + ['éco Δ' ~ delta ~ '°C'] %}{% endif %}
+    {% if summer_active %}{% set m = m + ['protection été'] %}{% endif %}
+    {% if cooling_active %}{% set m = m + ['refroidissement'] %}{% endif %}
+    {% if is_night %}{% set m = m + ['nuit'] %}{% endif %}
+    {% if outdoor_polluted %}{% set m = m + ['air ext. pollué'] %}{% endif %}
+    {% if boosts_allowed and hum_boost %}{% set m = m + ['boost humidité'] %}{% endif %}
+    {% if boosts_allowed and co2_flow > 0 %}{% set m = m + ['boost CO₂'] %}{% endif %}
+    {% if boosts_allowed and pollution_flow > 0 %}{% set m = m + ['boost pollution'] %}{% endif %}
+    {{ (m | join(', ') ~ ' → ' ~ target_flow ~ ' m³/h')[:255] }}
+
+conditions:
+  - condition: template
+    value_template: "{{ not override_entity or not is_state(override_entity, 'on') }}"
+
+actions:
+  # Garder le mode Modbus Flow (la Brink peut revenir en mode LCD après une coupure)
+  - if:
+      - condition: template
+        value_template: >
+          {% set opts = state_attr(control_mode_entity, 'options') if control_mode_entity else none %}
+          {{ opts is not none and opts | count >= 3 and states(control_mode_entity) != opts[2] }}
+    then:
+      - action: select.select_option
+        target:
+          entity_id: "{{ control_mode_entity }}"
+        data:
+          option: "{{ state_attr(control_mode_entity, 'options')[2] }}"
+
+  # Mémoire du boost humidité
+  - if:
+      - condition: template
+        value_template: "{{ humidity_latch_entity != '' and hum_boost != latch_on }}"
+    then:
+      - action: "input_boolean.turn_{{ 'on' if hum_boost else 'off' }}"
+        target:
+          entity_id: "{{ humidity_latch_entity }}"
+
+  # By-pass : options du select dans l'ordre [Auto, Fermé, Ouvert] (indépendant de la langue)
+  - if:
+      - condition: template
+        value_template: "{{ bypass_options | count >= 3 }}"
+    then:
+      - variables:
+          wanted_bypass: >
+            {% if cooling_active %}{{ bypass_options[2] }}
+            {% elif summer_active %}{{ bypass_options[1] }}
+            {% elif bypass_default == 'closed' %}{{ bypass_options[1] }}
+            {% else %}{{ bypass_options[0] }}{% endif %}
+      - if:
+          - condition: template
+            value_template: "{{ states(bypass_mode_entity) != wanted_bypass }}"
+        then:
+          - action: select.select_option
+            target:
+              entity_id: "{{ bypass_mode_entity }}"
+            data:
+              option: "{{ wanted_bypass }}"
+
+  - if:
+      - condition: template
+        value_template: >
+          {{ bypass_boost_entity != ''
+             and states(bypass_boost_entity) in ['on', 'off']
+             and is_state(bypass_boost_entity, 'on') != cooling_active }}
+    then:
+      - action: "switch.turn_{{ 'on' if cooling_active else 'off' }}"
+        target:
+          entity_id: "{{ bypass_boost_entity }}"
+
+  # Débit
+  - if:
+      - condition: template
+        value_template: >
+          {% if current_flow is number %}
+            {{ (target_flow - current_flow) | abs >= min_change }}
+          {% else %}
+            {{ states(flow_entity) not in ['unavailable'] }}
+          {% endif %}
+    then:
+      - action: number.set_value
+        target:
+          entity_id: "{{ flow_entity }}"
+        data:
+          value: "{{ target_flow }}"
+
+  - if:
+      - condition: template
+        value_template: "{{ status_entity != '' and states(status_entity) != mode_label }}"
+    then:
+      - action: input_text.set_value
+        target:
+          entity_id: "{{ status_entity }}"
+        data:
+          value: "{{ mode_label }}"

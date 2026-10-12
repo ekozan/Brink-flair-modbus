@@ -77,3 +77,9 @@ Contact me: alphonsuijtdehaag at gmail dot com, if you are interested in a M5sta
 It has I2C port to connect a SCD40/41 or ENVIII sensor
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/ebbenberg)
+
+# Home Assistant blueprint (smart ventilation)
+A Home Assistant automation blueprint that drives the flow rate and bypass intelligently
+(heat-saving flow reduction, free cooling, summer heat protection, humidity/CO2/pollution boosts,
+away/vacation and night modes) is available in
+[`homeassistant/blueprints`](homeassistant/blueprints/README.md) (documentation in French).
