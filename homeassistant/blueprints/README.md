@@ -24,7 +24,8 @@ débit cible     = max(base, demande), borné entre min et max
 | Économie de calories | écart T int − T ext > 12 °C | débit réduit linéairement jusqu'au « débit éco minimum » à 25 °C d'écart |
 | Refroidissement gratuit | T int ≥ 24 °C, T ext ≤ T int − 2 °C, T ext ≥ 12 °C | by-pass **ouvert** + débit refroidissement en Modbus Flow ; s'arrête quand T int redescend à 22,5 °C |
 | Protection été | T ext ≥ T int − 0,5 °C et T int ≥ 22 °C | by-pass **fermé** (l'échangeur récupère la fraîcheur), débit réduit |
-| Boost humidité | dérivée ≥ 1 %/min **ou** humidité ≥ 80 % | débit boost ; maintenu au moins 10 min, puis tant que l'humidité baisse vite (< −0,3 %/min) et reste > 60 % ; 60 min maximum |
+| Boost cuisine / salle de bain (humidité) | dans **n'importe quelle pièce** suivie : dérivée ≥ 1 %/min **ou** humidité ≥ 80 % | débit boost ; maintenu au moins 10 min, puis tant qu'une pièce sèche encore vite (< −0,3 %/min) et que la plus humide reste > 60 % ; 60 min maximum |
+| Boost cuisine / douche (déclencheur direct) | hotte, plaque, douche, lumière SDB… passe ON | débit boost immédiat, prolongé 15 min après l'arrêt ; un déclencheur resté ON plus de 60 min est ignoré |
 | Boost CO₂ | CO₂ > 800 ppm | débit proportionnel jusqu'au max à 1200 ppm |
 | Boost pollution | capteur PM2.5 / COV > seuil bas | débit proportionnel jusqu'au max au seuil haut |
 | Pollution extérieure | PM2.5 ext ≥ 35 | débit de base plafonné |
@@ -67,12 +68,15 @@ Valeurs par défaut entre parenthèses.
 - Refroidir aussi en absence (oui), plafond de nuit appliqué au refroidissement (non)
 - Position du by-pass le reste du temps : Auto ou Fermé (Auto)
 
-**Boost humidité**
-- Capteur d'humidité, dérivée en %/min, mémoire `input_boolean` (optionnels)
+**Boost cuisine / salle de bain**
+- Capteurs d'humidité et dérivées en %/min, **plusieurs possibles** (SDB, cuisine…) ; la pièce la plus humide compte
+- Déclencheurs directs (hotte, plaque, douche, lumière SDB…), plusieurs possibles
+- Temporisation après arrêt d'un déclencheur direct (15 min)
+- Mémoire du boost `input_boolean` (optionnel, recommandé)
 - Seuil de montée (1 %/min), seuil de stabilisation (0,3 %/min)
 - Humidité absolue de boost (80 %), humidité de fin (60 %)
 - Durée minimale (10 min) / maximale (60 min)
-- Débit boost humidité (280 m³/h)
+- Débit boost cuisine / salle de bain (280 m³/h)
 
 **Boost CO₂ et pollution**
 - Capteur CO₂ (optionnel), début de boost (800 ppm), boost maximal (1200 ppm)
@@ -96,7 +100,10 @@ Valeurs par défaut entre parenthèses.
 2. **Températures** : une sonde intérieure de référence (thermostat, ou la sonde de
    l'ESP sur l'extraction) et `sensor.brink_temperature_from_outside`.
 3. **Helpers** (Paramètres > Appareils et services > Entrées), tous facultatifs :
-   - **Dérivée** du capteur d'humidité : précision 2, fenêtre 3 min, unité de temps *minutes* ;
+   - une **Dérivée** par capteur d'humidité (SDB, cuisine) : précision 2, fenêtre 3 min,
+     unité de temps *minutes* ;
+   - pour une hotte sur prise connectée : un **Capteur de seuil** sur la puissance
+     (ex. > 30 W) à utiliser comme déclencheur direct ;
    - **Interrupteur** `input_boolean.vmc_boost_humidite` : mémoire du boost humidité
      (sans lui le boost s'arrête dès que l'humidité ne monte plus) ;
    - **Interrupteur** `input_boolean.vmc_pause` : suspend l'automatisation (mode manuel) ;

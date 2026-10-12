@@ -234,28 +234,52 @@ blueprint:
                   value: closed
 
     humidity:
-      name: Boost humidité
-      icon: mdi:water-percent
+      name: Boost cuisine / salle de bain (humidité)
+      icon: mdi:shower-head
       input:
         humidity_entity:
-          name: Humidité (optionnel)
-          description: Ex. sensor.brink_humidity_from_inside ou capteur de salle de bain.
-          default: ""
+          name: Capteurs d'humidité (optionnel, plusieurs possibles)
+          description: >
+            Salle de bain, cuisine, ou sensor.brink_humidity_from_inside. C'est la pièce la plus
+            humide qui compte.
+          default: []
           selector:
             entity:
+              multiple: true
               filter:
                 domain: sensor
                 device_class: humidity
         humidity_derivative_entity:
-          name: Dérivée de l'humidité en %/min (optionnel)
+          name: Dérivées de l'humidité en %/min (optionnel, plusieurs possibles)
           description: >
-            Helper « Dérivée » (Paramètres > Helpers > Dérivée) sur le capteur d'humidité,
-            unité de temps = minutes, fenêtre ≈ 3 min.
-          default: ""
+            Un helper « Dérivée » (Paramètres > Helpers > Dérivée) par capteur d'humidité,
+            unité de temps = minutes, fenêtre ≈ 3 min. Une montée rapide dans n'importe quelle
+            pièce déclenche le boost.
+          default: []
           selector:
             entity:
+              multiple: true
               filter:
                 domain: sensor
+        activity_entities:
+          name: Déclencheurs directs cuisine / douche (optionnel)
+          description: >
+            Hotte, plaque de cuisson, douche, interrupteur de salle de bain... (binary_sensor,
+            switch, input_boolean, fan, light). Le boost démarre tout de suite quand l'un d'eux
+            passe ON, sans attendre la montée d'humidité. Pour une hotte branchée sur une prise
+            connectée, créez un helper « Capteur de seuil » sur la puissance.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                domain: [binary_sensor, switch, input_boolean, fan, light]
+        activity_afterrun:
+          name: Temporisation après arrêt d'un déclencheur direct
+          description: Le boost continue ce temps après l'extinction (puis l'humidité prend le relais).
+          default: 15
+          selector:
+            number: {min: 0, max: 120, step: 1, unit_of_measurement: min}
         humidity_latch_entity:
           name: Mémoire du boost humidité (recommandé)
           description: >
@@ -302,7 +326,7 @@ blueprint:
           selector:
             number: {min: 5, max: 240, step: 5, unit_of_measurement: min}
         flow_humidity:
-          name: Débit boost humidité
+          name: Débit boost cuisine / salle de bain
           default: 280
           selector:
             number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
@@ -470,6 +494,8 @@ variables:
   humidity_min_duration: !input humidity_min_duration
   humidity_max_duration: !input humidity_max_duration
   flow_humidity: !input flow_humidity
+  activity_entities: !input activity_entities
+  activity_afterrun: !input activity_afterrun
   co2_entity: !input co2_entity
   co2_low: !input co2_low
   co2_high: !input co2_high
@@ -494,8 +520,37 @@ variables:
   t_out: "{{ states(temp_out_entity) | float(none) }}"
   temps_ok: "{{ t_in is number and t_out is number }}"
   delta: "{{ (t_in - t_out) | round(1) if temps_ok else none }}"
-  hum: "{{ states(humidity_entity) | float(none) if humidity_entity else none }}"
-  hum_deriv: "{{ states(humidity_derivative_entity) | float(none) if humidity_derivative_entity else none }}"
+  hum_list: >
+    {% set ns = namespace(v=[]) %}
+    {% for e in ([humidity_entity] if humidity_entity is string else humidity_entity) | select %}
+      {% set x = states(e) | float(none) %}
+      {% if x is number %}{% set ns.v = ns.v + [x] %}{% endif %}
+    {% endfor %}
+    {{ ns.v }}
+  deriv_list: >
+    {% set ns = namespace(v=[]) %}
+    {% for e in ([humidity_derivative_entity] if humidity_derivative_entity is string else humidity_derivative_entity) | select %}
+      {% set x = states(e) | float(none) %}
+      {% if x is number %}{% set ns.v = ns.v + [x] %}{% endif %}
+    {% endfor %}
+    {{ ns.v }}
+  humidity_configured: "{{ hum_list | count > 0 or deriv_list | count > 0 }}"
+  hum: "{{ hum_list | max if hum_list | count > 0 else none }}"
+  hum_deriv: "{{ deriv_list | max if deriv_list | count > 0 else none }}"
+  hum_deriv_min: "{{ deriv_list | min if deriv_list | count > 0 else none }}"
+  activity_list: "{{ ([activity_entities] if activity_entities is string else activity_entities) | select | list }}"
+  activity_boost: >
+    {% set ns = namespace(on=false) %}
+    {% for e in activity_list %}
+      {% set age = (now() - states[e].last_changed).total_seconds() / 60 if states[e] else 0 %}
+      {% if is_state(e, 'on') %}
+        {# un déclencheur oublié (lumière restée allumée) ne boost pas plus que la durée max #}
+        {% if age < humidity_max_duration %}{% set ns.on = true %}{% endif %}
+      {% elif is_state(e, 'off') and age < activity_afterrun %}
+        {% set ns.on = true %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.on }}
   co2: "{{ states(co2_entity) | float(none) if co2_entity else none }}"
   pollution: "{{ states(pollution_entity) | float(none) if pollution_entity else none }}"
   outdoor_pollution: "{{ states(outdoor_pollution_entity) | float(none) if outdoor_pollution_entity else none }}"
@@ -586,7 +641,7 @@ variables:
     {{ (hum_deriv is number and hum_deriv >= humidity_rise)
        or (hum is number and hum >= humidity_high) }}
   hum_boost: >
-    {% if not (humidity_entity or humidity_derivative_entity) %}
+    {% if not humidity_configured %}
       {{ false }}
     {% elif not humidity_latch_entity %}
       {{ hum_rising }}
@@ -600,7 +655,7 @@ variables:
       {{ true }}
     {% else %}
       {% set dried = hum is number and hum < humidity_ok %}
-      {% set stable = hum_deriv is number and hum_deriv > -humidity_fall and hum_deriv < humidity_rise %}
+      {% set stable = hum_deriv is number and hum_deriv_min > -humidity_fall and hum_deriv < humidity_rise %}
       {% set still_high = hum is number and hum >= humidity_high %}
       {{ not dried and (not stable or still_high) }}
     {% endif %}
@@ -621,7 +676,7 @@ variables:
     {% if not boosts_allowed %}
       0
     {% else %}
-      {{ [flow_humidity if hum_boost else 0, co2_flow, pollution_flow] | max }}
+      {{ [flow_humidity if (hum_boost or activity_boost) else 0, co2_flow, pollution_flow] | max }}
     {% endif %}
 
   # ---------- Cible ----------
@@ -637,6 +692,7 @@ variables:
     {% if cooling_active %}{% set m = m + ['refroidissement'] %}{% endif %}
     {% if is_night %}{% set m = m + ['nuit'] %}{% endif %}
     {% if outdoor_polluted %}{% set m = m + ['air ext. pollué'] %}{% endif %}
+    {% if boosts_allowed and activity_boost %}{% set m = m + ['boost cuisine/douche'] %}{% endif %}
     {% if boosts_allowed and hum_boost %}{% set m = m + ['boost humidité'] %}{% endif %}
     {% if boosts_allowed and co2_flow > 0 %}{% set m = m + ['boost CO₂'] %}{% endif %}
     {% if boosts_allowed and pollution_flow > 0 %}{% set m = m + ['boost pollution'] %}{% endif %}
