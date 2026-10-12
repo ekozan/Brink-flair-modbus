@@ -5,6 +5,8 @@
 Automatisation Home Assistant qui pilote le débit (m³/h) et le by-pass d'une Brink Flair
 via l'ESPHome de ce dépôt. Elle tourne chaque minute, calcule un débit cible et n'écrit sur
 le Modbus que si ce débit change d'au moins *Variation minimale* (10 m³/h par défaut).
+Les hausses sont immédiates ; une baisse n'est appliquée qu'après au moins *Durée minimale
+avant une baisse* (5 min par défaut) au débit actuel, pour éviter les va-et-vient.
 
 ## Logique
 
@@ -53,6 +55,7 @@ Valeurs par défaut entre parenthèses.
 - Débit normal en présence (150 m³/h)
 - Débit absence (90 m³/h) / vacances (60 m³/h)
 - Variation minimale avant écriture Modbus (10 m³/h)
+- Durée minimale avant une baisse de débit (5 min) : les hausses sont immédiates, les baisses attendent que le débit actuel soit tenu au moins ce temps
 
 **Températures, économie de calories et été**
 - Température intérieure, température extérieure *(obligatoires)*

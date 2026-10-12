@@ -112,6 +112,14 @@ blueprint:
           default: 10
           selector:
             number: {min: 1, max: 100, step: 1, unit_of_measurement: "m³/h"}
+        min_hold:
+          name: Durée minimale avant une baisse de débit
+          description: >
+            Après une hausse (boost, refroidissement...), le débit est maintenu au moins ce
+            temps avant de pouvoir redescendre. Les hausses restent immédiates.
+          default: 5
+          selector:
+            number: {min: 0, max: 60, step: 1, unit_of_measurement: min}
 
     thermal:
       name: Températures, économie de calories et été
@@ -466,6 +474,7 @@ variables:
   flow_away: !input flow_away
   flow_vacation: !input flow_vacation
   min_change: !input min_change
+  min_hold: !input min_hold
   temp_in_entity: !input temp_in_entity
   temp_out_entity: !input temp_out_entity
   eco_delta_start: !input eco_delta_start
@@ -682,6 +691,13 @@ variables:
   # ---------- Cible ----------
   target_flow: >
     {{ ([[[base_flow_final, demand_flow] | max, flow_min] | max, flow_max] | min) | int }}
+  # ---------- Anti-oscillation : pas de baisse avant min_hold ----------
+  flow_age: >
+    {% if states[flow_entity] %}
+      {{ ((now() - states[flow_entity].last_changed).total_seconds() / 60) | round(1) }}
+    {% else %}{{ 9999 }}{% endif %}
+  decrease_blocked: >
+    {{ current_flow is number and target_flow < current_flow and flow_age < min_hold }}
   mode_label: >
     {% set m = [] %}
     {% if vacation %}{% set m = m + ['vacances'] %}
@@ -696,7 +712,12 @@ variables:
     {% if boosts_allowed and hum_boost %}{% set m = m + ['boost humidité'] %}{% endif %}
     {% if boosts_allowed and co2_flow > 0 %}{% set m = m + ['boost CO₂'] %}{% endif %}
     {% if boosts_allowed and pollution_flow > 0 %}{% set m = m + ['boost pollution'] %}{% endif %}
-    {{ (m | join(', ') ~ ' → ' ~ target_flow ~ ' m³/h')[:255] }}
+    {% set txt = m | join(', ') ~ ' → ' ~ target_flow ~ ' m³/h' %}
+    {% if decrease_blocked %}
+      {% set txt = txt ~ ' (maintien ' ~ current_flow | int ~ ' m³/h encore '
+                   ~ (min_hold - flow_age) | round(0, 'ceil') | int ~ ' min)' %}
+    {% endif %}
+    {{ txt[:255] }}
 
 conditions:
   - condition: template
@@ -751,7 +772,7 @@ actions:
       - condition: template
         value_template: >
           {% if current_flow is number %}
-            {{ (target_flow - current_flow) | abs >= min_change }}
+            {{ (target_flow - current_flow) | abs >= min_change and not decrease_blocked }}
           {% else %}
             {{ states(flow_entity) not in ['unavailable'] }}
           {% endif %}
