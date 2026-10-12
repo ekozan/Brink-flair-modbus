@@ -31,6 +31,7 @@ débit cible     = max(base, demande), borné entre min et max
 | Boost CO₂ | CO₂ > 800 ppm | débit proportionnel jusqu'au max à 1200 ppm |
 | Boost pollution | capteur PM2.5 / COV > seuil bas | débit proportionnel jusqu'au max au seuil haut |
 | Pollution extérieure | PM2.5 ext ≥ 35 | débit de base plafonné |
+| Boost manuel | `input_boolean` mis sur ON (bouton du tableau de bord) | débit boost manuel pendant 30 min, puis retour automatique (l'interrupteur repasse sur OFF) ; prioritaire sur l'absence et la nuit |
 | Absence | présence OFF depuis 15 min | débit absence (boosts désactivés sauf option) |
 | Vacances | interrupteur vacances ON | débit vacances |
 | Nuit | plage horaire | débit plafonné, les boosts restent prioritaires |
@@ -48,6 +49,7 @@ Valeurs par défaut entre parenthèses.
 - Mode de contrôle Modbus — `select.brink_modbus_control_mode`, maintenu sur Modbus Flow *(obligatoire)*
 - Mode by-pass — `select.brink_bypass_mode` (optionnel)
 - Pause / mode manuel — `input_boolean` (optionnel)
+- Boost manuel — `input_boolean` (optionnel), durée (30 min), débit (280 m³/h)
 - Texte d'état — `input_text` (optionnel)
 
 **Débits**
@@ -109,6 +111,7 @@ Valeurs par défaut entre parenthèses.
      (ex. > 30 W) à utiliser comme déclencheur direct ;
    - **Interrupteur** `input_boolean.vmc_boost_humidite` : mémoire du boost humidité
      (sans lui le boost s'arrête dès que l'humidité ne monte plus) ;
+   - **Interrupteur** `input_boolean.vmc_boost_manuel` : boost manuel temporisé (bouton sur le tableau de bord) ;
    - **Interrupteur** `input_boolean.vmc_pause` : suspend l'automatisation (mode manuel) ;
    - **Interrupteur** `input_boolean.vacances` ;
    - **Texte** `input_text.vmc_etat` (max 255) : affiche le mode actif, ex.

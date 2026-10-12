@@ -67,6 +67,27 @@ blueprint:
             entity:
               filter:
                 domain: input_boolean
+        manual_boost_entity:
+          name: Boost manuel (optionnel)
+          description: >
+            input_boolean à mettre sur ON (bouton du tableau de bord) pour forcer le débit de
+            boost manuel pendant la durée choisie. Il repasse automatiquement sur OFF à la fin ;
+            le remettre sur OFF avant annule le boost.
+          default: []
+          selector:
+            entity:
+              filter:
+                domain: input_boolean
+        manual_boost_duration:
+          name: Durée du boost manuel
+          default: 30
+          selector:
+            number: {min: 1, max: 240, step: 1, unit_of_measurement: min}
+        flow_manual_boost:
+          name: Débit du boost manuel
+          default: 280
+          selector:
+            number: {min: 0, max: 600, step: 5, unit_of_measurement: "m³/h"}
         status_entity:
           name: Texte d'état (optionnel)
           description: input_text où écrire le mode actif et le débit cible (debug / dashboard).
@@ -461,12 +482,18 @@ triggers:
     minutes: "/1"
   - trigger: homeassistant
     event: start
+  # réaction immédiate au bouton de boost manuel
+  - trigger: state
+    entity_id: !input manual_boost_entity
 
 variables:
   flow_entity: !input flow_entity
   control_mode_entity: !input control_mode_entity
   bypass_mode_entity: !input bypass_mode_entity
   override_entity: !input override_entity
+  manual_boost_input: !input manual_boost_entity
+  manual_boost_duration: !input manual_boost_duration
+  flow_manual_boost: !input flow_manual_boost
   status_entity: !input status_entity
   flow_min: !input flow_min
   flow_max: !input flow_max
@@ -688,9 +715,21 @@ variables:
       {{ [flow_humidity if (hum_boost or activity_boost) else 0, co2_flow, pollution_flow] | max }}
     {% endif %}
 
+  # ---------- Boost manuel ----------
+  manual_boost_entity: >
+    {{ (([manual_boost_input] if manual_boost_input is string else manual_boost_input) | select | list + [''])[0] }}
+  manual_minutes: >
+    {% if manual_boost_entity and states[manual_boost_entity] %}
+      {{ ((now() - states[manual_boost_entity].last_changed).total_seconds() / 60) | round(1) }}
+    {% else %}{{ 0 }}{% endif %}
+  manual_on: "{{ manual_boost_entity != '' and is_state(manual_boost_entity, 'on') }}"
+  manual_boost: "{{ manual_on and manual_minutes < manual_boost_duration }}"
+
   # ---------- Cible ----------
   target_flow: >
-    {{ ([[[base_flow_final, demand_flow] | max, flow_min] | max, flow_max] | min) | int }}
+    {% set f = [base_flow_final, demand_flow] | max %}
+    {% if manual_boost %}{% set f = [f, flow_manual_boost] | max %}{% endif %}
+    {{ ([[f, flow_min] | max, flow_max] | min) | int }}
   # ---------- Anti-oscillation : pas de baisse avant min_hold ----------
   flow_age: >
     {% if states[flow_entity] %}
@@ -708,6 +747,7 @@ variables:
     {% if cooling_active %}{% set m = m + ['refroidissement'] %}{% endif %}
     {% if is_night %}{% set m = m + ['nuit'] %}{% endif %}
     {% if outdoor_polluted %}{% set m = m + ['air ext. pollué'] %}{% endif %}
+    {% if manual_boost %}{% set m = m + ['boost manuel (reste ' ~ (manual_boost_duration - manual_minutes) | round(0, 'ceil') | int ~ ' min)'] %}{% endif %}
     {% if boosts_allowed and activity_boost %}{% set m = m + ['boost cuisine/douche'] %}{% endif %}
     {% if boosts_allowed and hum_boost %}{% set m = m + ['boost humidité'] %}{% endif %}
     {% if boosts_allowed and co2_flow > 0 %}{% set m = m + ['boost CO₂'] %}{% endif %}
@@ -736,6 +776,15 @@ actions:
           entity_id: "{{ control_mode_entity }}"
         data:
           option: "{{ state_attr(control_mode_entity, 'options')[2] }}"
+
+  # Fin du boost manuel
+  - if:
+      - condition: template
+        value_template: "{{ manual_on and not manual_boost }}"
+    then:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: "{{ manual_boost_entity }}"
 
   # Mémoire du boost humidité
   - if:
