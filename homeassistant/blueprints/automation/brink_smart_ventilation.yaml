@@ -334,7 +334,9 @@ blueprint:
             number: {min: 0, max: 5, step: 0.1, unit_of_measurement: "%/min"}
         humidity_high:
           name: Humidité absolue de boost
-          description: Boost aussi si l'humidité dépasse ce niveau.
+          description: >
+            Boost aussi si l'humidité dépasse ce niveau. Ignoré si la mémoire du boost n'est pas
+            renseignée (sinon le boost pourrait tourner en continu par temps humide).
           default: 80
           selector:
             number: {min: 40, max: 100, step: 1, unit_of_measurement: "%"}
@@ -673,14 +675,12 @@ variables:
     {% if humidity_latch_entity and states[humidity_latch_entity] %}
       {{ ((now() - states[humidity_latch_entity].last_changed).total_seconds() / 60) | round(1) }}
     {% else %}0{% endif %}
-  hum_rising: >
-    {{ (hum_deriv is number and hum_deriv >= humidity_rise)
-       or (hum is number and hum >= humidity_high) }}
   hum_boost: >
     {% if not humidity_configured %}
       {{ false }}
     {% elif not humidity_latch_entity %}
-      {{ hum_rising }}
+      {# sans mémoire : pas de durée max, donc seule une montée rapide déclenche (jamais le seuil absolu) #}
+      {{ hum_deriv is number and hum_deriv >= humidity_rise }}
     {% elif not latch_on %}
       {# niveau absolu : pas de redéclenchement immédiat après la durée max #}
       {{ (hum_deriv is number and hum_deriv >= humidity_rise)

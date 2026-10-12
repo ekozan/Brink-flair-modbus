@@ -79,7 +79,7 @@ Valeurs par défaut entre parenthèses.
 - Temporisation après arrêt d'un déclencheur direct (15 min)
 - Mémoire du boost `input_boolean` (optionnel, recommandé)
 - Seuil de montée (1 %/min), seuil de stabilisation (0,3 %/min)
-- Humidité absolue de boost (80 %), humidité de fin (60 %)
+- Humidité absolue de boost (80 %) — ignorée sans mémoire du boost, pour qu'il ne tourne jamais en continu — et humidité de fin (60 %)
 - Durée minimale (10 min) / maximale (60 min)
 - Débit boost cuisine / salle de bain (280 m³/h)
 
